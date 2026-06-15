@@ -1,0 +1,23 @@
+<resources>
+    <string name="app_name">fetosensedemo</string>
+
+    <string name="bluetooth_is_not_available">Bluetooth is not available on this device</string>
+    <string name="Please_wait_while_it_connect_to_device">Please wait while it connects to the device</string>
+    <string name="no_devices_found">No devices found</string>
+    <string name="disconnected">Disconnected</string>
+    <string name="unable_to_connect_device">Unable to connect to device</string>
+    <string name="device_connection_lost">Device connection was lost</string>
+    <string name="connected_to">Connected to: </string>
+
+    <string name="title_status">Status</string>
+    <string name="status_not_connected">Not connected</string>
+    <string name="label_sensor_name">Device name filter</string>
+    <string name="label_use_ble">Use BLE (FetoSense)</string>
+    <string name="action_connect">Connect</string>
+    <string name="action_disconnect">Disconnect</string>
+    <string name="action_start_reading">Start Reading</string>
+    <string name="label_heart_rate">Heart Rate (bpm)</string>
+    <string name="label_toco">Toco</string>
+    <string name="label_afm">AFM</string>
+    <string name="permissions_required">Bluetooth and location permissions are required to connect to the device</string>
+</resources>

@@ -1,0 +1,836 @@
+
+
+import android.Manifest;
+import android.app.Activity;
+import android.bluetooth.BluetoothAdapter;
+import android.content.ComponentName;
+import android.content.Intent;
+import android.content.pm.ActivityInfo;
+import android.content.pm.PackageManager;
+import android.content.res.Configuration;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.CountDownTimer;
+import android.os.Handler;
+import android.util.Log;
+import android.view.Display;
+import android.view.View;
+import android.view.View.OnClickListener;
+import android.widget.Button;
+import android.widget.ImageView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import androidx.annotation.Keep;
+import androidx.annotation.NonNull;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
+
+import com.neurosynaptic.ble.DataHandler;
+import com.neurosynaptic.ble.sensors.DeviceScanActivity;
+import com.neurosynaptic.custom.view.DonutProgress;
+import com.neurosynaptic.nova_iassist.R;
+import com.neurosynaptic.usb.LocaleHelper;
+import com.nscpl.bluetooth.BluetoothMeasureParameter;
+import com.nscpl.bluetooth.BluetoothMeasureParameter.BluetoothConnectionStatus;
+import com.nscpl.bluetooth.BluetoothMeasureParameter.FetalDopplerReading;
+import com.nscpl.libble.BLEDeviceScan.OnScanResult;
+import com.nscpl.util.Logger;
+
+import java.io.File;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.Locale;
+import java.util.TimeZone;
+
+@Keep
+
+public class FetalDoppler1 extends Activity implements OnScanResult, DataHandler.DataRecievedFromNova, BluetoothConnectionStatus, FetalDopplerReading, OnClickListener {
+
+    public static final String FETAL_DOPPLER_HERAT_RATE = "heart_rate";
+    public static final String FETAL_FILE_NAME = "fetal_Reading";
+    final long totalSeconds = 30;
+    private long startTime,startTime2;
+
+    String starttime,endtime;
+    String pid, id;
+    String className, packageName;
+    boolean select = false;
+    File file;
+    TextView display_content, record;
+    boolean check = true;
+    long intervalSeconds = 1;
+    //private static final boolean useSensor = false;
+    private ImageView deviceInfo;
+    private TextView fetal_heart_rate, playRecording;
+    private BluetoothMeasureParameter measureParameter;
+    private Button stop, save, discard, start;
+    private String mHeartRate = "", finalHeartRate = "";
+    private DonutProgress progress;
+    int count = 0;
+    private Handler handler = new Handler();
+    String language;
+    private boolean useBLEService;
+    private String sensorName;
+
+
+    DataHandler d;
+    CountDownTimer timer = new CountDownTimer(totalSeconds * 1000, intervalSeconds * 1000) {
+
+        public void onTick(long millisUntilFinished) {
+            Logger.d("seconds elapsed: ", "" + (totalSeconds * 1000 - millisUntilFinished) / 1000);
+            if(measureParameter!=null);
+            measureParameter.startReading();
+            startTime2 = System.currentTimeMillis();
+            progressDisplay();
+
+        }
+
+
+        public void onFinish() {
+            Logger.d("done!", "Time's up!");
+            Logger.d("display", "done");
+            handler.removeCallbacksAndMessages(null);
+            measureParameter.stop();
+
+            long endTime2 = System.currentTimeMillis();
+
+            long totalTime = endTime2 - startTime2;
+
+            Log.d("TAG", "Running time 2: " + totalTime + " milliseconds");
+
+            progress.setMax(0);
+            progress.setProgress(0);
+            setMessage(getResources().getString(R.string.save_or_discard));
+            stop.setVisibility(View.INVISIBLE);
+        }
+
+    };
+    public static final String TAG = FetalDoppler1.class.getSimpleName();
+
+    static public boolean deleteDirectory(File path) {
+
+        if (path.exists()) {
+            File[] files = path.listFiles();
+            for (int i = 0; i < files.length; i++) {
+                if (files[i].isDirectory()) {
+                    deleteDirectory(files[i]);
+                } else {
+                    files[i].delete();
+                }
+            }
+        }
+        return (path.delete());
+    }
+
+    String[] permission;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+
+        long startTimeMillis = System.currentTimeMillis();
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US);
+        sdf.setTimeZone(TimeZone.getTimeZone("UTC")); // Convert to UTC
+        starttime =  sdf.format(new Date(startTimeMillis));
+
+
+         startTime = System.currentTimeMillis();
+        Log.d(TAG, "onCreate: time "+startTime);
+
+        Intent intent = getIntent();
+        language = intent.getStringExtra("language");
+        LocaleHelper.loadLocale(this, language);
+
+        setContentView(R.layout.activity_fetal_doppler);
+        Logger.d(TAG, "fetalDopplerDebug, onCreate() called....");
+
+        pid = intent.getStringExtra("pid");
+        useBLEService = intent.getBooleanExtra("useBLEService", false);
+        sensorName = intent.getStringExtra("sensorName");
+        className = intent.getStringExtra("class_name");
+        Logger.d("className", "" + className);
+        packageName = intent.getStringExtra("package_name");
+        Logger.d("packageName", "" + packageName);
+
+
+        Logger.d(TAG, "I-assist_language, (feetal_dopler) lang = " + language);
+
+        DeviceScanActivity.USE_SENSOR = intent.getBooleanExtra(DeviceScanActivity.KEY_USE_SENSOR, true);
+
+
+        deviceInfo = (ImageView) findViewById(R.id.device_info);
+        fetal_heart_rate = (TextView) findViewById(R.id.fetal_pulseRate);
+        playRecording = (TextView) findViewById(R.id.play_recording);
+        progress = (DonutProgress) findViewById(R.id.donut_progress);
+        display_content = (TextView) findViewById(R.id.display);
+        record = (TextView) findViewById(R.id.record);
+
+
+
+        stop = (Button) findViewById(R.id.stop);
+        save = (Button) findViewById(R.id.save);
+        discard = (Button) findViewById(R.id.discard);
+
+        stop.setOnClickListener(this);
+        save.setOnClickListener(this);
+        discard.setOnClickListener(this);
+
+
+        d = new DataHandler(FetalDoppler1.this, packageName, "com.nscpl.remedi_mobile.nurse.consultation.parameterReading.RemoteService");
+
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Log.d(TAG, "onCreate: loop 1");
+            permission = new String[]{
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.BLUETOOTH_CONNECT,
+                    Manifest.permission.BLUETOOTH_SCAN
+            };
+        } else {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                permission = new String[]{
+                        Manifest.permission.ACCESS_COARSE_LOCATION,
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                        Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                        Manifest.permission.READ_EXTERNAL_STORAGE,
+                        Manifest.permission.BLUETOOTH_CONNECT,
+                        Manifest.permission.BLUETOOTH_SCAN
+                };
+            } else {
+                permission = new String[]{
+                        Manifest.permission.ACCESS_COARSE_LOCATION,
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                        Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                        Manifest.permission.READ_EXTERNAL_STORAGE
+                };
+            }
+
+        }
+
+        Log.d(TAG, "onCreate: sdk verison "+Build.VERSION.SDK_INT);
+
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Log.d(TAG, "onCreate: loop 3");
+            checkPer1();
+        }
+        else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            Log.d(TAG, "onCreate: loop 2");
+            checkPer();
+        } else {
+            connectWithDevice();
+        }
+
+
+//        checkPer();
+        /*DateFormat df = new SimpleDateFormat("h_mm_ss");
+        String date = df.format(Calendar.getInstance().getTime());
+        if (pid != null) {
+            id = pid + date;
+            Logger.d("Time", "" + id);
+            measureParameter = new BluetoothMeasureParameter(FetalDoppler1.this, DeviceScanActivity.USE_SENSOR, id);
+        } else {
+            id = getDateTime();
+            measureParameter = new BluetoothMeasureParameter(FetalDoppler1.this, DeviceScanActivity.USE_SENSOR, getDateTime());
+        }
+        measureParameter.scanAndConnect();*/
+
+
+        deviceInfo.setOnClickListener(v -> {
+            /*Intent intent = new Intent(TemperatureSensor1.this, DeviceInfoActivity.class);
+            startActivity(intent);*/
+        });
+
+        playRecording.setOnClickListener(v -> new Thread(() -> {
+            measureParameter.readFileContent();
+            //measureParameter.readSoundFromFile();
+        }).start());
+    }
+
+
+
+
+
+    private void progressDisplay() {
+        progress.setMax(100);
+        progress.setProgress(70);
+
+        if(handler!=null)
+         handler.postDelayed(new Runnable() {
+            int value = 0;
+
+            @Override
+            public void run() {
+                if (value == 360) {
+                    value = 0;
+                } else {
+                    if (progress != null) {
+                        progress.setStartingDegree(value);
+                    }
+                    value = value + 10;
+                }
+
+                if(handler!=null) {
+                    Log.d(TAG, "run: handler" +handler);
+                    handler.postDelayed(this, 10);
+                }
+            }
+        }, 0);
+
+        int orientation = getScreenOrientation();
+        if (orientation == 1) {
+            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+        } else {
+            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+
+        }
+
+
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        measureParameter.onActivityResult(requestCode, resultCode, data);
+        super.onActivityResult(requestCode, resultCode, data);
+    }
+
+
+
+
+
+
+        @Override
+        public void onBackPressed () {
+
+
+        if (!packageName.equalsIgnoreCase("com.nscpl.test")) {
+
+            if (select) {
+                measureParameter.disconnect();
+
+
+                long startTimeMillis = System.currentTimeMillis();
+                SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US);
+                sdf.setTimeZone(TimeZone.getTimeZone("UTC")); // Convert to UTC
+                endtime = sdf.format(new Date(startTimeMillis));
+
+                Log.d(TAG, "onBackPressed: fetal "+starttime+" "+endtime);
+
+                Logger.d(TAG, "debugFeetaldooplerpackageName, packageNAme = " + packageName + "\n Class name = " + className);
+                Log.d(TAG, "onBackPressed: packageNAme = " + packageName + "\n Class name = " + className);
+                Logger.d(TAG, "debugFeetaldoplerhartrate, FETAL_DOPPLER_HERAT_RATE  = " + FETAL_DOPPLER_HERAT_RATE + "\nfinalHeartRate  = " + finalHeartRate);
+                Logger.d(TAG, "debugFeetaldoplerfile, FETAL_FILE_NAME  = " + FETAL_FILE_NAME + "\nfile  = " + file.toString());
+                Uri contentUri = FileProvider.getUriForFile(FetalDoppler1.this, "com.neurosynaptic.nova_iassist.fileprovider", file);
+                Intent sharingIntent = new Intent(Intent.ACTION_SEND);
+                sharingIntent.setType("text/*");
+                sharingIntent.putExtra(Intent.EXTRA_STREAM, contentUri);
+                sharingIntent.putExtra(FETAL_DOPPLER_HERAT_RATE, finalHeartRate);
+                sharingIntent.putExtra(DeviceScanActivity.SENSOR_TYPE, DeviceScanActivity.FETAL_DOPPLER);
+                sharingIntent.setComponent(new ComponentName(packageName, className));
+                sharingIntent.setFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                sharingIntent.setFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+
+                sharingIntent.putExtra("starttime", starttime);
+                sharingIntent.putExtra("endtime", endtime);
+
+                startActivity(sharingIntent);
+                Toast.makeText(FetalDoppler1.this, getString(R.string.saved_successfully), Toast.LENGTH_SHORT).show();
+
+            } else {
+                Toast.makeText(FetalDoppler1.this, getResources().getString(R.string.save_or_discard), Toast.LENGTH_LONG).show();
+            }
+
+        } else {
+            measureParameter.disconnect();
+            super.onBackPressed();
+        }
+
+    }
+
+        boolean found = false;
+
+        @Override
+        public void fetalDopplerReadingReceived ( int heartRate, int tocoWave,
+        int afmWave, int status1, int status2, byte[] dataArr, boolean b){
+
+
+        mHeartRate = Integer.toString(heartRate);
+        fetal_heart_rate.setText(mHeartRate);
+
+        Logger.d(TAG, "debugHartrates, hartrate : " + mHeartRate);
+
+        //  byte[] decodedBytes = Base64.decode(encodedString, Base64.NO_WRAP);
+
+        if (heartRate > 0) {
+
+            if (!found) {
+                display_content.setText(getResources().getString(R.string.heart_rate_found));
+                d.sendData("done_fetal_found");
+                found = true;
+            }
+
+            if (count == 1) {
+                stop.setVisibility(View.INVISIBLE);
+            } else {
+                stop.setVisibility(View.VISIBLE);
+            }
+        }
+    }
+
+        @Override
+        public void fetalDopplerframeRecieved ( byte[] data, boolean b){
+        try {
+            String encodedString = new String(data, "UTF-8");
+            Log.d(TAG, "fetalDopplerframeRecieved: Encoded String" + encodedString);
+            String s1 = "data_fetal_set_a_" + mHeartRate + "_" + encodedString;
+            d.sendData(s1);
+        } catch (Exception e) {
+
+        }
+    }
+
+        @Override
+        public void onNotConnected (String message){
+
+        Toast.makeText(FetalDoppler1.this, message, Toast.LENGTH_LONG).show();
+
+        BluetoothAdapter mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
+
+        if (!mBluetoothAdapter.isEnabled()) {
+            handler.removeCallbacksAndMessages(null);
+            if(measureParameter!=null)
+            measureParameter.stop();
+            progress.setMax(0);
+            progress.setProgress(0);
+            record.setText(getResources().getString(R.string.bluetooth_turned_off));
+            d.sendData("done_fetal_off");
+        } else {
+            if (message.equalsIgnoreCase("Device connection was lost")) {
+                handler.removeCallbacksAndMessages(null);
+                if(measureParameter!=null)
+                measureParameter.stop();
+                progress.setMax(0);
+                progress.setProgress(0);
+                d.sendData("done_fetal_lost");
+                record.setText(getResources().getString(R.string.device_connection_was_lost));
+            }
+        }
+
+
+    }
+
+        public void setMessage (String mess){
+
+        record.setText(mess);
+    }
+
+        @Override
+        public void onConnecting () {
+
+
+    }
+
+        @Override
+        public void onConnected (String deviceName){
+
+        long endTime = System.currentTimeMillis();
+        long totalTime = endTime - startTime;
+        Log.d("TAG", "Running time : " + totalTime + " milliseconds");
+
+        Toast.makeText(FetalDoppler1.this, getResources().getString(R.string.connected_to) + deviceName, Toast.LENGTH_SHORT).show();
+        if (useBLEService) {
+            d.sendData("ble_sensorconnected_fetosense_105");
+        } else {
+            d.sendData("ble_sensorconnected_FETALDoppler_70");
+        }
+
+            startTimer();
+        }
+
+    private void startTimer() {
+        try {
+            new CountDownTimer(30000, 1000) {
+
+                @Override
+                public void onTick(long millisUntilFinished) {
+                    //mTextField.setText("seconds remaining: " + millisUntilFinished / 1000);
+                    Logger.d("display the timer", "" + "seconds remaining: " + millisUntilFinished / 1000);
+
+                    if(measureParameter!=null)
+                      measureParameter.startReading();
+                    progressDisplay();
+
+
+                    try {
+
+                        Logger.d("display", "" + record.length());
+
+                        if (record != null && record.getText().toString().equalsIgnoreCase("Device connection was lost.Re-connect it again") || record.getText().toString().equalsIgnoreCase("Bluetooth turned off! Please take reading again")) {
+                            Logger.d("display the connection", "" + record.getText().toString());
+                            cancel();
+                            progress.setMax(0);
+                            progress.setProgress(0);
+                        }
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }
+
+                @Override
+                public void onFinish() {
+
+               if(handler!=null ) {
+                   Logger.d("display", "done");
+
+                   handler.removeCallbacksAndMessages(null);
+               }
+                 if(measureParameter!=null)
+                      measureParameter.stop();
+                    progress.setMax(0);
+                    progress.setProgress(0);
+                    setMessage(getResources().getString(R.string.save_or_discard));
+                    d.sendData("done_fetal_complete");
+                    stop.setVisibility(View.INVISIBLE);
+                    //  start.setVisibility(View.INVISIBLE);
+                }
+            }.start();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+        @Override
+        public void onClick (View v){
+        switch (v.getId()) {
+            case R.id.stop:
+
+                Logger.d(TAG, "debugdisplaycontent, content = " + display_content.getText().toString());
+                if (display_content != null && display_content.getText().toString().equalsIgnoreCase(getResources().getString(R.string.heart_rate_found))) {
+
+                    Toast.makeText(FetalDoppler1.this, getResources().getString(R.string.started_saving_the_reading), Toast.LENGTH_SHORT).show();
+                    record.setText(getResources().getString(R.string.record_started));
+                    display_content.setVisibility(View.INVISIBLE);
+                    d.sendData("record_fetal");
+                    //  start.setVisibility(View.INVISIBLE);
+                    stop.setVisibility(View.INVISIBLE);
+                    count++;
+                }
+
+                break;
+            case R.id.save:
+//                File fil = new File(Environment.getExternalStorageDirectory().toString() + File.separator + "Remedi" + File.separator + "Fetal_Sound" + File.separator);
+//                File fil = new File(Environment.getExternalStorageDirectory().toString() + File.separator + "Remedi" + File.separator + "Fetal_Sound" + File.separator);
+//                file = new File(fil, "Fetal_reading_" + id + ".txt");
+
+                // --------New File creation android 10-------------
+
+
+//                File externalDirectory = getExternalFilesDir(null);
+//                Logger.d(TAG, "filePathDebug, (save): externalDirectory >> " + externalDirectory.getPath());
+//
+//                File directoryFile = new File(externalDirectory, "Remedi/Fetal_Sound/");
+//                if (directoryFile.exists()) {
+//                    Logger.d(TAG, "filePathDebug, (save): directoryFile already exist..");
+//                } else {
+//                    directoryFile.mkdirs();
+//                    if (directoryFile.isDirectory()) {
+//                        Logger.d(TAG, "filePathDebug, (save): directoryFile created successfully...");
+//                    } else
+//                        Logger.e(TAG, "filePathDebug, (save): couldn't create directoryFile!!!");
+//                }
+//
+//                file = new File(directoryFile, "Fetal_reading_" + id + ".txt");
+//                Logger.d(TAG, "filePathDebug, (save): file: " + file);
+//                // storage/emulated/0/com.ne--ic.iAssist/files/Remedi/Fetal_sound/Fetal_reading_123.txt
+//                // -------------------------------------------------
+
+                saveFetalReading();
+
+                if (file.exists()) {
+                    Logger.d("path", "" + file.toString());
+                } else {
+                    Logger.d("path", "null");
+                }
+                finalHeartRate = mHeartRate;
+                Logger.d(TAG, "debugFinalHarrate, hartrate " + finalHeartRate);
+                if (finalHeartRate.length() > 0) {
+                    Toast.makeText(FetalDoppler1.this, getResources().getString(R.string.saved_successfully), Toast.LENGTH_LONG).show();
+
+                    if (d != null)
+                        d.sendData("clicked_save");
+
+                }
+                select = true;
+                onBackPressed();
+                finish();
+                break;
+            case R.id.discard:
+                try {
+                    handler.removeCallbacksAndMessages(null);
+                    measureParameter.stop();
+//                    File file = new File(Environment.getExternalStorageDirectory().toString()
+//                            + File.separator + "Remedi" + File.separator + "Fetal_Sound" + File.separator);
+//                    file = new File(file, "Fetal_reading_" + id + ".txt");
+
+                    File mFile = new File(getExternalFilesDir(null), "Remedi/Fetal_Sound/");
+
+                    //-----------------
+                    File externalDir = getExternalFilesDir(null);
+                    Log.d(TAG, "onClick: filePathDebug, (discard): externalDir >>" + externalDir.getPath());
+                    Logger.d(TAG, "filePathDebug, (discard): externalDir >> " + externalDir.getPath());
+                    File dirFile = new File(externalDir, "Remedi/Fetal_Sound/");
+                    file = new File(dirFile, "Fetal_reading_" + id + ".txt");
+                    Logger.d(TAG, "filePathDebug, (discard): file >> " + file);
+                    // -----------------
+
+                    if (file.exists()) {
+                        Log.d(TAG, "onClick: details");
+                        boolean del = file.delete();
+                        if (del) {
+                            if (d != null)
+                                d.sendData("clicked_discard");
+
+                            Toast.makeText(FetalDoppler1.this, getResources().getString(R.string.deleted), Toast.LENGTH_SHORT).show();
+                        }
+
+                    } else {
+                        if (d != null)
+                            d.sendData("clicked_discard");
+
+                    }
+                    finish();
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+                break;
+        }
+    }
+
+    private void saveFetalReading() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // Use app-specific directory for Android 13+
+            File externalDirectory = getExternalFilesDir(null);
+            File directoryFile = new File(externalDirectory, "Remedi/Fetal_Sound/");
+            if (!directoryFile.exists()) {
+                directoryFile.mkdirs();
+            }
+            file = new File(directoryFile, "Fetal_reading_" + id + ".txt");
+        } else {
+            // Use existing storage method for older versions
+            File externalDirectory = getExternalFilesDir(null);
+            File directoryFile = new File(externalDirectory, "Remedi/Fetal_Sound/");
+            if (!directoryFile.exists()) {
+                directoryFile.mkdirs();
+            }
+            file = new File(directoryFile, "Fetal_reading_" + id + ".txt");
+        }
+    }
+
+
+        @Override
+        public void onScanReturned (String name, String address){
+        // TODO Auto-generated method stub
+
+    }
+
+        private String getDateTime () {
+        DateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd_HH:mm:ss");
+        Date date = new Date();
+        return dateFormat.format(date);
+    }
+
+        public int getScreenOrientation () {
+        Display getOrient = this.getWindowManager().getDefaultDisplay();
+        int orientation = Configuration.ORIENTATION_UNDEFINED;
+        if (getOrient.getWidth() == getOrient.getHeight()) {
+            orientation = Configuration.ORIENTATION_SQUARE;
+        } else {
+            if (getOrient.getWidth() < getOrient.getHeight()) {
+                orientation = Configuration.ORIENTATION_PORTRAIT;
+            } else {
+                orientation = Configuration.ORIENTATION_LANDSCAPE;
+            }
+        }
+        return orientation;
+    }
+
+        private final int REQUEST_PERMISSIONS = 4;
+
+        public void checkPer () {
+
+        if (ContextCompat.checkSelfPermission(FetalDoppler1.this, Manifest.permission.ACCESS_COARSE_LOCATION) +
+                ContextCompat.checkSelfPermission(FetalDoppler1.this, Manifest.permission.ACCESS_FINE_LOCATION +
+                        ContextCompat.checkSelfPermission(FetalDoppler1.this, Manifest.permission.WRITE_EXTERNAL_STORAGE) +
+                        ContextCompat.checkSelfPermission(FetalDoppler1.this, Manifest.permission.READ_EXTERNAL_STORAGE) +
+                        ContextCompat.checkSelfPermission(FetalDoppler1.this, Manifest.permission.BLUETOOTH_CONNECT) +
+                        ContextCompat.checkSelfPermission(FetalDoppler1.this, Manifest.permission.BLUETOOTH_SCAN)) != PackageManager.PERMISSION_GRANTED) {
+
+            if (ActivityCompat.shouldShowRequestPermissionRationale(FetalDoppler1.this, Manifest.permission.ACCESS_COARSE_LOCATION) ||
+                    ActivityCompat.shouldShowRequestPermissionRationale(FetalDoppler1.this, Manifest.permission.ACCESS_FINE_LOCATION) ||
+                    ActivityCompat.shouldShowRequestPermissionRationale(FetalDoppler1.this, Manifest.permission.WRITE_EXTERNAL_STORAGE) ||
+                    ActivityCompat.shouldShowRequestPermissionRationale(FetalDoppler1.this, Manifest.permission.READ_EXTERNAL_STORAGE) ||
+                    ActivityCompat.shouldShowRequestPermissionRationale(FetalDoppler1.this, Manifest.permission.BLUETOOTH_CONNECT) ||
+                    ActivityCompat.shouldShowRequestPermissionRationale(FetalDoppler1.this, Manifest.permission.BLUETOOTH_SCAN)
+            ) {
+                //below s
+
+                ActivityCompat.requestPermissions(FetalDoppler1.this,
+                        permission,
+                        REQUEST_PERMISSIONS);
+
+            } else {
+
+                ActivityCompat.requestPermissions(FetalDoppler1.this,
+                        permission,
+                        REQUEST_PERMISSIONS);
+            }
+        } else {
+            connectWithDevice();
+        }
+    }
+
+
+
+    public void checkPer1() {
+
+        if (ContextCompat.checkSelfPermission(FetalDoppler1.this, Manifest.permission.ACCESS_COARSE_LOCATION) +
+                ContextCompat.checkSelfPermission(FetalDoppler1.this, Manifest.permission.ACCESS_FINE_LOCATION) +
+                ContextCompat.checkSelfPermission(FetalDoppler1.this, Manifest.permission.BLUETOOTH_CONNECT) +
+                ContextCompat.checkSelfPermission(FetalDoppler1.this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
+
+            if (ActivityCompat.shouldShowRequestPermissionRationale(FetalDoppler1.this, Manifest.permission.ACCESS_COARSE_LOCATION) ||
+                    ActivityCompat.shouldShowRequestPermissionRationale(FetalDoppler1.this, Manifest.permission.ACCESS_FINE_LOCATION) ||
+                    ActivityCompat.shouldShowRequestPermissionRationale(FetalDoppler1.this, Manifest.permission.BLUETOOTH_CONNECT) ||
+                    ActivityCompat.shouldShowRequestPermissionRationale(FetalDoppler1.this, Manifest.permission.BLUETOOTH_SCAN)
+            ) {
+                ActivityCompat.requestPermissions(FetalDoppler1.this,
+                        permission,
+                        REQUEST_PERMISSIONS);
+            } else {
+                ActivityCompat.requestPermissions(FetalDoppler1.this,
+                        permission,
+                        REQUEST_PERMISSIONS);
+            }
+        } else {
+            connectWithDevice();
+        }
+    }
+        @Override
+        public void onMessageReceived (String Data){
+        if (Data.equalsIgnoreCase("save")) {
+            save.callOnClick();
+
+        } else if (Data.equalsIgnoreCase("discard") || Data.equalsIgnoreCase("ble_close")) {
+            d.sendData("clicked_discard");
+            Intent intent = new Intent();
+            Log.d(TAG, "onMessageReceived: " + packageName);
+            intent.setComponent(new ComponentName(packageName, className));
+            startActivity(intent);
+            finish();
+
+
+        } else if (Data.equalsIgnoreCase("record")) {
+            stop.callOnClick();
+        }
+
+    }
+
+        @Override
+        protected void onDestroy () {
+        super.onDestroy();
+        d.sendData("complete");
+        handler = null;
+        measureParameter = null;
+        d.unBindService();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
+                                           @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+
+        if (requestCode == REQUEST_PERMISSIONS) {
+            if (grantResults.length > 0) {
+
+
+                boolean ACCESS_COARSE_LOCATION = grantResults[0] == PackageManager.PERMISSION_GRANTED;
+                boolean ACCESS_FINE_LOCATION = grantResults[1] == PackageManager.PERMISSION_GRANTED;
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    boolean BLUETOOTH_CONNECT = grantResults[2] == PackageManager.PERMISSION_GRANTED;
+                    boolean BLUETOOTH_SCAN = grantResults[3] == PackageManager.PERMISSION_GRANTED;
+
+                    if (ACCESS_COARSE_LOCATION && ACCESS_FINE_LOCATION && BLUETOOTH_CONNECT && BLUETOOTH_SCAN) {
+                        connectWithDevice();
+                    } else {
+                        Log.d(TAG, "onRequestPermissionsResult: toast 1 ");
+                        Toast.makeText(this, getResources().getString(R.string.please_give_all_the_permission), Toast.LENGTH_SHORT).show();
+                        ActivityCompat.requestPermissions(FetalDoppler1.this,
+                                permissions,
+                                REQUEST_PERMISSIONS);
+                    }
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    boolean WRITE_EXTERNAL_STORAGE = grantResults[2] == PackageManager.PERMISSION_GRANTED;
+                    boolean READ_EXTERNAL_STORAGE = grantResults[3] == PackageManager.PERMISSION_GRANTED;
+                    boolean BLUETOOTH_CONNECT = grantResults[4] == PackageManager.PERMISSION_GRANTED;
+                    boolean BLUETOOTH_SCAN = grantResults[5] == PackageManager.PERMISSION_GRANTED;
+
+                    if (ACCESS_COARSE_LOCATION && ACCESS_FINE_LOCATION && WRITE_EXTERNAL_STORAGE &&
+                            READ_EXTERNAL_STORAGE && BLUETOOTH_CONNECT && BLUETOOTH_SCAN) {
+                        connectWithDevice();
+                    } else {
+                        Log.d(TAG, "onRequestPermissionsResult: toast 2");
+                        Toast.makeText(this, getResources().getString(R.string.please_give_all_the_permission), Toast.LENGTH_SHORT).show();
+                        ActivityCompat.requestPermissions(FetalDoppler1.this,
+                                permissions,
+                                REQUEST_PERMISSIONS);
+                    }
+                } else {
+                    boolean WRITE_EXTERNAL_STORAGE = grantResults[2] == PackageManager.PERMISSION_GRANTED;
+                    boolean READ_EXTERNAL_STORAGE = grantResults[3] == PackageManager.PERMISSION_GRANTED;
+
+                    if (ACCESS_COARSE_LOCATION && ACCESS_FINE_LOCATION && WRITE_EXTERNAL_STORAGE && READ_EXTERNAL_STORAGE) {
+                        connectWithDevice();
+                    } else {
+                        Log.d(TAG, "onRequestPermissionsResult: toast 3");
+                        Toast.makeText(this, getResources().getString(R.string.please_give_all_the_permission), Toast.LENGTH_SHORT).show();
+                        ActivityCompat.requestPermissions(FetalDoppler1.this,
+                                permissions,
+                                REQUEST_PERMISSIONS);
+                    }
+                }
+            }
+        }
+    }
+
+        void connectWithDevice () {
+        DateFormat df = new SimpleDateFormat("h_mm_ss");
+        String date = df.format(Calendar.getInstance().getTime());
+        long endTime = System.currentTimeMillis();
+        long totalTime = endTime - startTime;
+        Log.d("TAG", "Running time 2: " + totalTime + " milliseconds");
+
+        if (pid != null) {
+
+            id = pid + date;
+            Logger.d("Time detail", "" + id);
+        } else {
+            id = getDateTime();
+        }
+
+        // SensorName should be null if you want to use old device("iFM10B") flow. else pass sensor name. sensorName is Device Bluetooth name like.
+        measureParameter = new BluetoothMeasureParameter(FetalDoppler1.this, DeviceScanActivity.USE_SENSOR, id, sensorName, useBLEService);
+
+        measureParameter.scanAndConnect();
+
+    }
+
+
+}
